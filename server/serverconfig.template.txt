@@ -1,0 +1,19 @@
+#tModLoader dedicated server config - Calamity server
+#Template. Copy to serverconfig.txt and set a real password before deploying.
+
+worldname=Calamity
+world=D:\terraria-server\data\Worlds\Calamity.wld
+worldpath=D:\terraria-server\data\Worlds
+autocreate=3
+difficulty=1
+worldevil=crimson
+seed=
+maxplayers=8
+port=7777
+password=CHANGEME
+motd=Calamity server - have fun, dont grief
+secure=1
+upnp=0
+npcstream=60
+priority=1
+language=en-US
