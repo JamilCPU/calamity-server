@@ -11,7 +11,11 @@ $Stamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 if (-not (Test-Path $Backups)) { New-Item -ItemType Directory -Path $Backups -Force | Out-Null }
 
-$files = Get-ChildItem $Worlds -Include '*.wld', '*.twld' -File -ErrorAction SilentlyContinue
+# Filter with Where-Object, not -Include: -Include silently matches nothing unless
+# the path ends in a wildcard or -Recurse is used, so the backup reported success
+# while copying zero files.
+$files = Get-ChildItem $Worlds -File -ErrorAction SilentlyContinue |
+         Where-Object { $_.Extension -in '.wld', '.twld' }
 if (-not $files) {
     Write-Output "$Stamp no world files found in $Worlds - nothing to back up"
     exit 0

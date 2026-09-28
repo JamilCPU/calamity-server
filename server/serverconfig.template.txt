@@ -6,8 +6,11 @@ world=D:\terraria-server\data\Worlds\Calamity.wld
 worldpath=D:\terraria-server\data\Worlds
 autocreate=3
 difficulty=1
-worldevil=crimson
 seed=
+#Evil biome is NOT settable here - worldevil in serverconfig.txt is ignored and the
+#world log reports "Evil: -1" (random). To force it, pass it on the command line at
+#world-creation time instead: -worldevil crimson (or corrupt). Only has any effect
+#when the world is first generated.
 maxplayers=8
 port=7777
 password=CHANGEME
