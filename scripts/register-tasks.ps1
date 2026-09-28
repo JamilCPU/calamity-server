@@ -22,8 +22,12 @@ function Register-Task {
     Write-Output "registered: $Name"
 }
 
+# Points at the supervisor, not run-server.ps1: the task must be the server's
+# parent. Anything launched from an SSH session is killed when that session ends,
+# so starting the server through this task is also the only reliable way to start
+# it remotely, not just at boot.
 Register-Task -Name 'TerrariaCalamityServer' `
-    -ScriptPath (Join-Path $ScriptDir 'run-server.ps1') `
+    -ScriptPath (Join-Path $ScriptDir 'supervise-server.ps1') `
     -Trigger (New-ScheduledTaskTrigger -AtStartup) `
     -Description 'Starts the Calamity tModLoader dedicated server at boot.'
 
