@@ -12,7 +12,9 @@ seed=
 #world-creation time instead: -worldevil crimson (or corrupt). Only has any effect
 #when the world is first generated.
 maxplayers=8
-port=7777
+#Deliberately not the 7777 default - that port is swept constantly by bots whose
+#half-open sockets consume player slots. 25564 sits just below Minecraft on 25565.
+port=25564
 password=CHANGEME
 motd=Calamity server - have fun, dont grief
 secure=1

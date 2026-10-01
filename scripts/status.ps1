@@ -24,13 +24,18 @@ foreach ($p in $all) {
     if ($ps) { $mb += [math]::Round($ps.WS / 1MB) }
 }
 
-$listen = (Get-NetTCPConnection -LocalPort 7777 -State Listen -ErrorAction SilentlyContinue | Measure-Object).Count
+$Port   = 25564   # moved off the scanned 7777 default; see serverconfig.txt
+$listen = (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Measure-Object).Count
+$dead   = (Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
+           Where-Object { $_.State -eq 'CloseWait' } | Measure-Object).Count
 $world  = Test-Path (Join-Path $Root 'data\Worlds\Calamity.wld')
 
 $warn = ''
 if ($mainPids.Count -gt 1) { $warn = '  *** MULTIPLE MAIN SERVERS - world corruption risk ***' }
 
-Write-Output "main=$($mainPids -join ',') subworld=$($subPids -join ',') ram_mb=$mb listening=$listen world_exists=$world$warn"
+if ($dead -gt 0) { $warn += "  (${dead} dead CloseWait sockets holding player slots)" }
+
+Write-Output "port=$Port main=$($mainPids -join ',') subworld=$($subPids -join ',') ram_mb=$mb listening=$listen world_exists=$world$warn"
 
 $log = Join-Path $Root 'logs\server.log'
 if (Test-Path $log) {
