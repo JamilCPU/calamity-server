@@ -17,7 +17,10 @@ maxplayers=8
 port=25564
 password=CHANGEME
 motd=Calamity server - have fun, dont grief
-secure=1
+#Keep this 0 on a modded server: secure=1 enables Terraria's vanilla anti-cheat, which
+#false-positives on Calamity summoner minions and multi-shot guns and kicks real players
+#with "Cheating attempt detected: Projectile spam".
+secure=0
 upnp=0
 npcstream=60
 priority=1
