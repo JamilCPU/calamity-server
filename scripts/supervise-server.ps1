@@ -7,21 +7,34 @@
 #
 # COMMAND CHANNEL: write lines to D:\terraria-server\command.txt and they are sent to
 # the server's console, then the file is deleted. That makes `say`, `save` and a
-# graceful `exit` possible from outside -- previously there was no way to talk to the
-# running server at all, so every restart was a force-kill that discarded everything
-# since the last autosave.
+# graceful `exit` possible from outside.
 #
-# stdout is pumped asynchronously via an event handler rather than a blocking
-# ReadLine, so the main loop stays free to watch for commands.
+# HOW STDOUT IS PUMPED -- this matters, do not "simplify" it:
+#   * A blocking ReadLine loop is fast but owns the thread, leaving nothing free to
+#     poll for commands.
+#   * Register-ObjectEvent with a per-line action block is free-threaded but far too
+#     slow: PowerShell invokes a scriptblock per line, the pipe buffer fills, and the
+#     SERVER BLOCKS ON ITS OWN WRITES. Measured: startup crawled to ~34% of one core
+#     and took 5+ minutes without finishing, versus 2-3 minutes normally.
+#   * So: copy the raw stream with .NET's CopyToAsync, which runs off-thread with no
+#     per-line scripting cost, and keep the main loop free for the command file.
+#
+# Supervisor events go to supervisor.log rather than server.log, because a second
+# writer interleaving with CopyToAsync on the same handle is not safe.
 
 $ErrorActionPreference = 'Stop'
 
-$Root    = 'D:\terraria-server'
-$Logs    = Join-Path $Root 'logs'
-$Log     = Join-Path $Logs 'server.log'
-$CmdFile = Join-Path $Root 'command.txt'
+$Root     = 'D:\terraria-server'
+$Logs     = Join-Path $Root 'logs'
+$Log      = Join-Path $Logs 'server.log'
+$SupLog   = Join-Path $Logs 'supervisor.log'
+$CmdFile  = Join-Path $Root 'command.txt'
 
 if (-not (Test-Path $Logs)) { New-Item -ItemType Directory -Path $Logs -Force | Out-Null }
+
+function Write-Sup([string]$msg) {
+    Add-Content -Path $SupLog -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $msg" -Encoding ascii
+}
 
 # Never run two servers against one world -- concurrent writes corrupt the .wld.
 $existing = Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -ErrorAction SilentlyContinue |
@@ -35,8 +48,11 @@ if ((Test-Path $Log) -and (Get-Item $Log).Length -gt 20MB) {
     Move-Item $Log (Join-Path $Logs 'server.prev.log') -Force
 }
 
-# A stale command file from a previous run must not be replayed into the new server.
+# A stale command file must not be replayed into the new server.
 if (Test-Path $CmdFile) { Remove-Item $CmdFile -Force -ErrorAction SilentlyContinue }
+
+# Run-boundary marker, written and closed BEFORE the async copy takes the handle.
+[System.IO.File]::AppendAllText($Log, "=== started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ===`r`n")
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName               = Join-Path $Root 'dotnet\dotnet.exe'
@@ -46,27 +62,14 @@ $psi.UseShellExecute        = $false
 $psi.RedirectStandardInput  = $true
 $psi.RedirectStandardOutput = $true
 
-$writer = [System.IO.StreamWriter]::new($Log, $true)
-$writer.AutoFlush = $true
-
-$proc = New-Object System.Diagnostics.Process
-$proc.StartInfo = $psi
-$proc.EnableRaisingEvents = $true
-
-# Pump stdout asynchronously. If this handler ever fails we lose logging but the
-# server keeps running, which is the right way round.
-$sub = Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -MessageData $writer -Action {
-    if ($null -ne $EventArgs.Data) {
-        try { $Event.MessageData.WriteLine($EventArgs.Data) } catch { }
-    }
-}
-
-$proc.Start() | Out-Null
-$proc.BeginOutputReadLine()
+$proc = [System.Diagnostics.Process]::Start($psi)
 $proc.StandardInput.AutoFlush = $true
 
-$writer.WriteLine("=== started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') PID $($proc.Id) ===")
-Write-Output "started PID $($proc.Id), logging to $Log, commands via $CmdFile"
+$fs   = [System.IO.File]::Open($Log, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+$copy = $proc.StandardOutput.BaseStream.CopyToAsync($fs)
+
+Write-Sup "started PID $($proc.Id)"
+Write-Output "started PID $($proc.Id), log $Log, commands via $CmdFile"
 
 while (-not $proc.HasExited) {
     if (Test-Path $CmdFile) {
@@ -76,19 +79,21 @@ while (-not $proc.HasExited) {
             foreach ($c in $cmds) {
                 $line = $c.Trim()
                 if ($line) {
-                    $writer.WriteLine("=== console command: $line ===")
                     $proc.StandardInput.WriteLine($line)
+                    Write-Sup "console command sent: $line"
                 }
             }
         } catch {
-            # File was probably still being written; try again next tick.
+            # Probably mid-write; retry next tick.
         }
     }
+    try { $fs.Flush() } catch { }
     Start-Sleep -Milliseconds 500
 }
 
 $proc.WaitForExit()
-try { Unregister-Event -SubscriptionId $sub.Id -ErrorAction SilentlyContinue } catch { }
-$writer.WriteLine("=== exited $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') code $($proc.ExitCode) ===")
-$writer.Close()
+try { $copy.Wait(5000) | Out-Null } catch { }
+try { $fs.Flush(); $fs.Close() } catch { }
+[System.IO.File]::AppendAllText($Log, "=== exited $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') code $($proc.ExitCode) ===`r`n")
+Write-Sup "exited code $($proc.ExitCode)"
 Write-Output "server exited with code $($proc.ExitCode)"
