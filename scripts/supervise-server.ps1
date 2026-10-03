@@ -1,20 +1,25 @@
 # Runs the Calamity tModLoader dedicated server and stays alive for its lifetime.
 #
 # WHY A SUPERVISOR: the server reads console commands from stdin. Launched detached
-# (Start-Process, `start`, or a scheduled task) it gets no stdin, immediately reads
-# EOF and exits cleanly with code 0 partway through mod loading -- which looked like
-# a crash but was not. Verified by running the identical command over SSH, where
-# stdin stays open and the server starts normally.
+# (scheduled task, Start-Process) it gets no stdin, immediately reads EOF and exits
+# cleanly with code 0 partway through mod loading -- which looks like a crash but is
+# not. This script holds the stdin pipe open so the server never sees EOF.
 #
-# This script keeps the stdin pipe open by holding the StreamWriter and not closing
-# it, so the server never sees EOF. It must therefore outlive the server, which is
-# why the scheduled task runs this rather than the server directly.
+# COMMAND CHANNEL: write lines to D:\terraria-server\command.txt and they are sent to
+# the server's console, then the file is deleted. That makes `say`, `save` and a
+# graceful `exit` possible from outside -- previously there was no way to talk to the
+# running server at all, so every restart was a force-kill that discarded everything
+# since the last autosave.
+#
+# stdout is pumped asynchronously via an event handler rather than a blocking
+# ReadLine, so the main loop stays free to watch for commands.
 
 $ErrorActionPreference = 'Stop'
 
-$Root = 'D:\terraria-server'
-$Logs = Join-Path $Root 'logs'
-$Log  = Join-Path $Logs 'server.log'
+$Root    = 'D:\terraria-server'
+$Logs    = Join-Path $Root 'logs'
+$Log     = Join-Path $Logs 'server.log'
+$CmdFile = Join-Path $Root 'command.txt'
 
 if (-not (Test-Path $Logs)) { New-Item -ItemType Directory -Path $Logs -Force | Out-Null }
 
@@ -30,31 +35,60 @@ if ((Test-Path $Log) -and (Get-Item $Log).Length -gt 20MB) {
     Move-Item $Log (Join-Path $Logs 'server.prev.log') -Force
 }
 
+# A stale command file from a previous run must not be replayed into the new server.
+if (Test-Path $CmdFile) { Remove-Item $CmdFile -Force -ErrorAction SilentlyContinue }
+
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName               = Join-Path $Root 'dotnet\dotnet.exe'
 $psi.Arguments              = 'tModLoader.dll -server -config serverconfig.txt -tmlsavedirectory data'
 $psi.WorkingDirectory       = $Root
 $psi.UseShellExecute        = $false
-$psi.RedirectStandardInput  = $true   # the whole point: keep this pipe open
+$psi.RedirectStandardInput  = $true
 $psi.RedirectStandardOutput = $true
-# stderr is left inherited on purpose: redirecting it too would need a second pump
-# to avoid filling its buffer and deadlocking the server.
-
-$proc = [System.Diagnostics.Process]::Start($psi)
-Write-Output "started PID $($proc.Id), logging to $Log"
 
 $writer = [System.IO.StreamWriter]::new($Log, $true)
 $writer.AutoFlush = $true
-$writer.WriteLine("=== started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') PID $($proc.Id) ===")
 
-# Pump stdout until the stream closes. ReadLine blocks, which is fine here.
-while ($true) {
-    $line = $proc.StandardOutput.ReadLine()
-    if ($null -eq $line) { break }
-    $writer.WriteLine($line)
+$proc = New-Object System.Diagnostics.Process
+$proc.StartInfo = $psi
+$proc.EnableRaisingEvents = $true
+
+# Pump stdout asynchronously. If this handler ever fails we lose logging but the
+# server keeps running, which is the right way round.
+$sub = Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -MessageData $writer -Action {
+    if ($null -ne $EventArgs.Data) {
+        try { $Event.MessageData.WriteLine($EventArgs.Data) } catch { }
+    }
+}
+
+$proc.Start() | Out-Null
+$proc.BeginOutputReadLine()
+$proc.StandardInput.AutoFlush = $true
+
+$writer.WriteLine("=== started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') PID $($proc.Id) ===")
+Write-Output "started PID $($proc.Id), logging to $Log, commands via $CmdFile"
+
+while (-not $proc.HasExited) {
+    if (Test-Path $CmdFile) {
+        try {
+            $cmds = Get-Content $CmdFile -ErrorAction Stop
+            Remove-Item $CmdFile -Force -ErrorAction SilentlyContinue
+            foreach ($c in $cmds) {
+                $line = $c.Trim()
+                if ($line) {
+                    $writer.WriteLine("=== console command: $line ===")
+                    $proc.StandardInput.WriteLine($line)
+                }
+            }
+        } catch {
+            # File was probably still being written; try again next tick.
+        }
+    }
+    Start-Sleep -Milliseconds 500
 }
 
 $proc.WaitForExit()
+try { Unregister-Event -SubscriptionId $sub.Id -ErrorAction SilentlyContinue } catch { }
 $writer.WriteLine("=== exited $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') code $($proc.ExitCode) ===")
 $writer.Close()
 Write-Output "server exited with code $($proc.ExitCode)"
