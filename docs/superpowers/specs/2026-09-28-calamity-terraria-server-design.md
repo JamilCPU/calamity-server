@@ -18,7 +18,7 @@ the world is corrupted or a mod update breaks the save.
 | CPU / RAM | Ryzen 5 5600G (6c/12t) / 32 GB, 23.5 GB free |
 | Disk | `C:` 360 GB free, `D:` 454 GB free (only 22 GB used) |
 | Already hosting | Modded Minecraft (ATM10/NeoForge, java ~0.73 GB idle), AI Art Factory dashboard on `:8077` |
-| SSH | native `ssh user@192.0.2.197`, key `C:\Users\jamil\.ssh\id_ed25519`, remote shell is `cmd.exe`. **NOT** `wsl ssh` — that presents the wrong key |
+| SSH | native `ssh user@192.0.2.197`, key `~/.ssh/id_ed25519`, remote shell is `cmd.exe`. **NOT** `wsl ssh` — that presents the wrong key |
 | Port 7777 | Free |
 | Tailscale | Installed at `C:\Program Files\Tailscale` but unauthenticated (`state: NoState`). Unused by this project |
 | Mod source | Workstation 192.0.2.99, 41 tModLoader workshop mods at `C:\Program Files (x86)\Steam\steamapps\workshop\content\1281930` |
